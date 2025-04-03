@@ -4,11 +4,13 @@ import json
 from collections.abc import Callable
 from threading import Thread, Lock
 import pyaudio
-from vosk import Model, KaldiRecognizer
+from vosk import Model, KaldiRecognizer, SetLogLevel
 import logging
 
 logger = logging.getLogger("transcription_logger")
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
+logging.disable(logging.CRITICAL)
+SetLogLevel(-1)
 
 class Transcriber:
     def __init__(self, model_path) -> None:
@@ -89,7 +91,7 @@ class Transcriber:
                     # Log the transcribed text
                     text = result_dict.get("text", "")
                     if text:
-                        logger.debug("You said: %s", e)
+                        logger.debug("You said: %s", text)
 
         except Exception as e:
             logger.error("Unexpected error in transcription thread: %s", e)
