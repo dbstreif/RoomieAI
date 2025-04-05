@@ -1,11 +1,13 @@
 import os
 import sys
 import json
+from time import sleep
 from collections.abc import Callable
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 import pyaudio
 from vosk import Model, KaldiRecognizer, SetLogLevel
 import logging
+from wake_word_detector import WakeWordDetector
 
 logger = logging.getLogger("transcription_logger")
 # logging.basicConfig(level=logging.DEBUG)
@@ -13,13 +15,16 @@ logging.disable(logging.CRITICAL)
 SetLogLevel(-1)
 
 class Transcriber:
-    def __init__(self, model_path) -> None:
-        self.chunk_size: int = 8192 # Adjust chunk size for performance (larger = faster but less responsive)
+    def __init__(self, model_path, wakewords, wakeword_exclusions) -> None:
+        self.wakewords: list[str] = wakewords 
+        self.wakeword_exclusions: list[str] = wakeword_exclusions
+        self.chunk_size: int = 4096 # Adjust chunk size for performance (larger = faster but less responsive)
         self.formatting = pyaudio.paInt16
         self.channels: int = 1
         self.rate: int = 16000 # Vosk models typically expect 16KHz audio
         self.data_callback: Callable = None
         self.err_callback: Callable = None
+        self.command_callback: Callable = None
 
         self.p = pyaudio.PyAudio()
         self.stream = self.__init_audio_stream()
@@ -33,6 +38,7 @@ class Transcriber:
             raise ValueError("Recognizer initialization failed")
 
         self.stream_bool = False
+        self.stop_event = Event()
         self.stream_lock = Lock()
 
 
@@ -51,14 +57,9 @@ class Transcriber:
 
     def __transcribe(self) -> None:
         logger.info("Transcription thread started.")
+        self.stream_lock.acquire()
         try:
-            while True:
-                # Check if transcription should stop
-                with self.stream_lock:
-                    if not self.stream_bool:
-                        logger.info("Transcription thread stopping.")
-                        break
-
+            while not self.stop_event.is_set():
                 # Read audio data from the microphone
                 try:
                     data = self.stream.read(self.chunk_size, exception_on_overflow=False)
@@ -78,15 +79,35 @@ class Transcriber:
                     # Validate and parse the result
                     try:
                         result_dict = json.loads(result)
+                        result_dict['command'] = False
+                        text = None
+
+                        if len(result_dict['text']) != 0:
+                            text = result_dict['text'].lower().split()
+                        else:
+                            continue
+
+                        # Post processing wake word detection
+                        wake_word_detector = WakeWordDetector(text[0], self.wakewords, self.wakeword_exclusions, 65)
+                        if wake_word_detector.process_result():
+                            result_dict['command'] = True
                     except json.JSONDecodeError as e:
                         logger.error("Failed to parse JSON result: %s", e)
                         continue
 
                     # Call the callback function with the transcription result
                     try:
-                        self.data_callback(result_dict)
+                        if self.data_callback is not None:
+                            self.data_callback(result_dict)
                     except Exception as e:
                         logger.error("Error in data callback: %s", e)
+
+                    # Call the command callback function with the transcription result
+                    try:
+                        if result_dict['command'] and self.command_callback is not None:
+                            self.command_callback(result_dict)
+                    except Exception as e:
+                        logger.error("Error in command callback: %s", e)
 
                     # Log the transcribed text
                     text = result_dict.get("text", "")
@@ -95,11 +116,13 @@ class Transcriber:
 
         except Exception as e:
             logger.error("Unexpected error in transcription thread: %s", e)
-            self.err_callback("Unexpected error in transcription thread: %s", e)
+            self.err_callback("Unexpected error in transcription thread: " + str(e))
 
         finally:
+            logger.debug("Transcription Halted")
+            self.stop_event.clear()
             self.stream.stop_stream()
-            logger.info("Transcription thread has stopped.")
+            self.stream_lock.release()
 
         """
         else:
@@ -155,36 +178,50 @@ class Transcriber:
             self.err_callback = None
             logger.error("Error callback function not of callable type!")
 
+    def register_command_callback(self, func: Callable) -> None:
+        if callable(func):
+            self.command_callback = func
+            logger.debug("Command callback registered successfully")
+        else:
+            self.command_callback = None
+            logger.error("Command callback function not of callable type!")
+
 
     def start_transcription(self) -> None:
         """
         Perform real-time speech-to-text transcription using Vosk and PyAudio.
         """
-        with self.stream_lock:
-            if self.stream_bool:
-                logger.error("Cannot launch new transcriber. Transcription active already.")
-                self.err_callback("Cannot launch new transcriber. Transcription active already.")
-                return
+        if self.err_callback is None:
+            raise ValueError("Error callback function must be set to begin transcription")
+        if self.stream_bool:
+            logger.error("Cannot launch new transcriber. Transcription active already.")
+            self.err_callback("Cannot launch new transcriber. Transcription active already.")
+            return
 
-            print("Listening...")
-            self.stream_bool = True
-            self.stream.start_stream()
+        print("Listening...")
+        self.stream_bool = True
+        self.stream.start_stream()
 
-            trans_thread = Thread(target=self.__transcribe, name="TranscriptionThread")
-            trans_thread.start()
+        trans_thread = Thread(target=self.__transcribe, name="TranscriptionThread")
+        trans_thread.start()
 
 
     def stop_transcription(self) -> None:
-        with self.stream_lock:
-            if not self.stream_bool:
-                logger.error("Transcriber already in stopped state!")
-                self.err_callback("Transcriber already in stopped state!")
-                return
+        if not self.stream_bool:
+            logger.error("Transcriber already in stopped state!")
+            self.err_callback("Transcriber already in stopped state!")
+            return
 
-            self.stream_bool = False
-            self.stream.stop_stream()
+        self.stream_bool = False
+        self.stop_event.set()
+        logger.debug("Transcription halt requested")
 
 
     def close(self) -> None:
-        self.stream.close()
-        self.p.terminate()
+        with self.stream_lock:
+            while not self.stream.is_stopped():
+                sleep(0.1)
+            self.stream.close()
+            self.p.terminate()
+        logger.debug("All streams terminated!")
+        logger.debug("Exiting Gracefully...")
