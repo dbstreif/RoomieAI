@@ -10,8 +10,8 @@ import logging
 from wake_word_detector import WakeWordDetector
 
 logger = logging.getLogger("transcription_logger")
-# logging.basicConfig(level=logging.DEBUG)
-logging.disable(logging.CRITICAL)
+logging.basicConfig(level=logging.DEBUG)
+# logging.disable(logging.CRITICAL)
 SetLogLevel(-1)
 
 class Transcriber:
@@ -28,6 +28,8 @@ class Transcriber:
 
         self.p = pyaudio.PyAudio()
         self.stream = self.__init_audio_stream()
+        if self.stream is None:
+            raise ValueError("Stream initialization failed")
 
         self.model = self.__load_vosk_model(model_path)
         if self.model is None:
@@ -38,33 +40,45 @@ class Transcriber:
             raise ValueError("Recognizer initialization failed")
 
         self.stream_bool = False
+        self.pause_bool = False
         self.stop_event = Event()
+        self.pause_event = Event()
         self.stream_lock = Lock()
 
 
     def __init_audio_stream(self):
         # Initialize PyAudio stream
-        stream = self.p.open(
-            format=self.formatting,
-            channels=self.channels,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            start=False
-        )
-        return stream
+        try:
+            stream = self.p.open(
+                format=self.formatting,
+                channels=self.channels,
+                rate=self.rate,
+                input=True,
+                frames_per_buffer=self.chunk_size,
+                start=False
+            )
+            return stream
+
+        except OSError as e:
+            logger.error("Failed to open audio stream: %s", e)
+            return None
 
 
     def __transcribe(self) -> None:
         logger.info("Transcription thread started.")
-        self.stream_lock.acquire()
         try:
             while not self.stop_event.is_set():
+                if self.pause_event.is_set():
+                    self.stream.read(self.chunk_size, exception_on_overflow=False)
+                    sleep(0.3)
+                    continue
+
                 # Read audio data from the microphone
                 try:
                     data = self.stream.read(self.chunk_size, exception_on_overflow=False)
                 except Exception as e:
                     logger.error("Error reading audio data: %s", e)
+                    sleep(1)
                     continue
 
                 # Continue the loop if no data is received
@@ -120,9 +134,8 @@ class Transcriber:
 
         finally:
             logger.debug("Transcription Halted")
-            self.stop_event.clear()
             self.stream.stop_stream()
-            self.stream_lock.release()
+            self.__close()
 
         """
         else:
@@ -199,11 +212,34 @@ class Transcriber:
             return
 
         print("Listening...")
-        self.stream_bool = True
+        with self.stream_lock:
+            self.stream_bool = True
+
+        self.stop_event.clear()
         self.stream.start_stream()
 
         trans_thread = Thread(target=self.__transcribe, name="TranscriptionThread")
         trans_thread.start()
+
+
+    def pause_transcription(self) -> None:
+        if not self.pause_bool:
+            self.pause_event.set()
+            self.pause_bool = True
+            logger.info("Audio capture paused")
+        else:
+            logger.warning("Audio capture already paused!")
+            self.err_callback("Audio capture already paused!")
+
+
+    def resume_transcription(self) -> None:
+        if self.pause_bool:
+            self.pause_event.clear()
+            self.pause_bool = False
+            logger.info("Audio capture resumed")
+        else:
+            logger.warning("Audio capture already active!")
+            self.err_callback("Audio capture already active!")
 
 
     def stop_transcription(self) -> None:
@@ -212,12 +248,13 @@ class Transcriber:
             self.err_callback("Transcriber already in stopped state!")
             return
 
-        self.stream_bool = False
-        self.stop_event.set()
+        with self.stream_lock:
+            self.stream_bool = False
+            self.stop_event.set()
         logger.debug("Transcription halt requested")
 
 
-    def close(self) -> None:
+    def __close(self) -> None:
         with self.stream_lock:
             while not self.stream.is_stopped():
                 sleep(0.1)
