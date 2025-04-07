@@ -10,8 +10,8 @@ import logging
 from wake_word_detector import WakeWordDetector
 
 logger = logging.getLogger("transcription_logger")
-logging.basicConfig(level=logging.DEBUG)
-# logging.disable(logging.CRITICAL)
+# logging.basicConfig(level=logging.DEBUG)
+logging.disable(logging.CRITICAL)
 SetLogLevel(-1)
 
 class Transcriber:
@@ -236,6 +236,7 @@ class Transcriber:
         if self.pause_bool:
             self.pause_event.clear()
             self.pause_bool = False
+            print("Listening...")
             logger.info("Audio capture resumed")
         else:
             logger.warning("Audio capture already active!")

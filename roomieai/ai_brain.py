@@ -15,15 +15,15 @@ def openai_call(text: str):
     messages = [
         {
             'role': 'user', 
-            'content': text
+            'content': text + " In less than 500 words. Whatever length is appropriate for the response up to 500 words." + " Respond with only latin characters, no symbols or numbers that a tts system would have trouble converting into speech, punctuation is okay except for exclamation marks."
         }
     ]
 
     try:
         response = client.chat.completions.create(
-            model="openai/gpt-4o",
+            model="meta-llama/llama-4-maverick:free",
             messages=messages,
-            max_tokens=50
+            max_tokens=1000
         )
 
         return {
