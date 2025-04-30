@@ -2,3 +2,4 @@ model
 small_model
 roomieai/__pycache__
 APIKEY.txt
+roomieai/devtext.py

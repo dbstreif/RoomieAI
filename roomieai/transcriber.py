@@ -8,6 +8,8 @@ import pyaudio
 from vosk import Model, KaldiRecognizer, SetLogLevel
 import logging
 from wake_word_detector import WakeWordDetector
+import numpy as np
+import librosa
 
 logger = logging.getLogger("transcription_logger")
 # logging.basicConfig(level=logging.DEBUG)
@@ -21,7 +23,7 @@ class Transcriber:
         self.chunk_size: int = 4096 # Adjust chunk size for performance (larger = faster but less responsive)
         self.formatting = pyaudio.paInt16
         self.channels: int = 1
-        self.rate: int = 16000 # Vosk models typically expect 16KHz audio
+        self.rate: int = 48000# Vosk models typically expect 16KHz audio
         self.data_callback: Callable = None
         self.err_callback: Callable = None
         self.command_callback: Callable = None
@@ -76,6 +78,13 @@ class Transcriber:
                 # Read audio data from the microphone
                 try:
                     data = self.stream.read(self.chunk_size, exception_on_overflow=False)
+                    audio_array = np.frombuffer(data, dtype=np.int16).astype(np.float32) 
+                    resampled_audio = librosa.resample( 
+                        audio_array, 
+                        orig_sr=self.rate,
+                        target_sr=16000
+                    ).astype(np.int16)
+                    data = resampled_audio.tobytes()
                 except Exception as e:
                     logger.error("Error reading audio data: %s", e)
                     sleep(1)

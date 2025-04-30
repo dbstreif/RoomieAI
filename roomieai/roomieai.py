@@ -2,19 +2,21 @@ from time import sleep
 import threading
 import queue
 import re
+from threading import Event
+import random
 from transcriber import Transcriber
 from TTS.api import TTS
 import numpy as np
 import sounddevice as sd
-from threading import Event
 from ai_brain import openai_call 
 import beepy
+from devtext import DEV3
 
 # Get device
 DEVICE = "cpu"
 
 # Init TTS
-tts = TTS("tts_models/en/ljspeech/glow-tts").to(DEVICE)
+tts = TTS("tts_models/en/ljspeech/vits").to(DEVICE)
 sample_rate = tts.synthesizer.output_sample_rate
 
 
@@ -40,6 +42,11 @@ def play_waveforms():
             break
         sd.play(np.array(waveform), samplerate=22050)
         sd.wait()
+
+
+def process_flag(flag: str, sentences: list[str]) -> None:
+    if flag == "yes":
+        sentences = sentences.append(random.choice(DEV3))
 
 
 def strip_rumi(data):
@@ -73,6 +80,7 @@ def command_callback_func(data):
         text = response.get("response", "")
         sentences = re.findall(r'[^.,]+[.,]?', text)
         sentences = [s.strip() for s in sentences]
+        process_flag(response.get("flag", ""), sentences)
 
         # Start producer and consumer threads
         producer_thread = threading.Thread(target=generate_waveforms, args=(sentences,))
@@ -106,6 +114,7 @@ transcriber.register_command_callback(command_callback_func)
 
 
 def main():
+    beepy.beep(sound=1)
     transcriber.start_transcription()
     try:
         while True:

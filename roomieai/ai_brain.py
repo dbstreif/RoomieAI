@@ -1,4 +1,5 @@
 from openai import OpenAI, APIError, AuthenticationError, RateLimitError
+from devtext import DEV1, DEV2
 
 BASE_URL = "https://openrouter.ai/api/v1"
 with open("APIKEY.txt", encoding="utf-8") as file:
@@ -14,8 +15,21 @@ def openai_call(text: str):
 
     messages = [
         {
+            'role': "developer",
+            'content': [
+            {
+                'type': "text",
+                'text': DEV1 
+            }
+        ]
+        },
+        {
+            'role': "assistant",
+            'content': DEV2
+        },
+        {
             'role': 'user', 
-            'content': text + " In less than 250 words. Whatever length is appropriate for the response up to 250 words." + " Respond with only latin characters, no symbols or numbers that a tts system would have trouble converting into speech, punctuation is okay except for exclamation marks."
+            'content': text
         }
     ]
 
@@ -26,9 +40,18 @@ def openai_call(text: str):
             max_tokens=1000
         )
 
+        reply = response.choices[0].message.content
+
+        # Parse the flag and the actual response
+        flag_start = reply.find("[FLAG:") + len("[FLAG:")
+        flag_end = reply.find("]", flag_start)
+        flag = reply[flag_start:flag_end].strip()
+        parsed_reply = reply[flag_end + 1:].strip()
+
         return {
             "status_code": 200,
-            "response": response.choices[0].message.content
+            "flag": flag,
+            "response": parsed_reply
         }
 
     except AuthenticationError as e:
